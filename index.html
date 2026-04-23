@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Baby Shield AI - 高精度監視</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.10.0/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DotGothic16&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap');
+
+:root {
+  --bg: #05070a;
+  --panel: #111827;
+  --accent: #0ea5e9;
+  --danger: #ef4444;
+  --safe: #10b981;
+  --text: #f8fafc;
+}
+
+body {
+  font-family: 'Zen Kaku Gothic New', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0; padding: 20px;
+  display: flex; flex-direction: column; align-items: center;
+}
+
+.container { width: 100%; max-width: 1000px; display: grid; grid-template-columns: 1fr 340px; gap: 20px; }
+
+/* モニターエリア */
+.monitor {
+  position: relative;
+  background: #000;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 2px solid #334155;
+  aspect-ratio: 4/3;
+}
+.monitor.danger-active { border-color: var(--danger); box-shadow: 0 0 30px rgba(239, 68, 68, 0.4); }
+
+#video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+#canvas { position: absolute; inset: 0; transform: scaleX(-1); }
+
+/* サイドパネル */
+.side-panel { display: flex; flex-direction: column; gap: 15px; }
+.card {
+  background: var(--panel);
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+
+.status-label { font-family: 'DotGothic16', monospace; font-size: 0.8rem; color: #94a3b8; margin-bottom: 8px; }
+.status-val { font-size: 1.8rem; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+
+/* 警告タイマー */
+.timer-box { text-align: center; display: none; }
+.timer-box.active { display: block; }
+#timer-num { font-size: 3rem; font-family: 'DotGothic16'; color: var(--danger); }
+
+.btn {
+  width: 100%; padding: 15px; border: none; border-radius: 12px;
+  font-weight: 700; cursor: pointer; transition: 0.2s;
+}
+.btn-primary { background: var(--accent); color: white; }
+.btn-mute { background: #334155; color: white; margin-top: 10px; }
+
+.log-area { height: 120px; overflow-y: auto; font-size: 0.75rem; color: #94a3b8; }
+.log-entry { margin-bottom: 4px; padding: 4px; border-bottom: 1px solid #1e293b; }
+
+.danger-text { color: var(--danger); animation: flash 0.5s infinite; }
+@keyframes flash { 50% { opacity: 0.3; } }
+</style>
+</head>
+<body>
+
+<h1 style="margin-bottom: 20px;">Baby Shield AI Monitor</h1>
+
+<div class="container">
+  <div class="monitor" id="monitorFrame">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas"></canvas>
+    
+    <div id="alertOverlay" style="position:absolute; inset:0; background:rgba(239,68,68,0.3); display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10;">
+        <span style="font-size:5rem;">🚨</span>
+        <h2 style="font-size:2rem; text-shadow: 0 0 10px #000;">うつ伏せ検出</h2>
+    </div>
+  </div>
+
+  <div class="side-panel">
+    <div class="card">
+      <div class="status-label">現在の状態</div>
+      <div class="status-val" id="statusMain">--</div>
+      <div id="statusSub" style="font-size:0.8rem; margin-top:5px; color:#94a3b8;">カメラ未起動</div>
+    </div>
+
+    <div class="card timer-box" id="timerCard">
+      <div class="status-label">継続警告</div>
+      <div id="timer-num">0</div>
+      <div style="font-size:0.7rem; color:var(--danger);">3秒後にアラートが発生します</div>
+    </div>
+
+    <div class="card">
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+        <div><div class="status-label">FPS</div><div id="fps">--</div></div>
+        <div><div class="status-label">信頼度</div><div id="conf">--%</div></div>
+      </div>
+    </div>
+
+    <button class="btn btn-primary" id="startBtn" onclick="init()">監視を開始する</button>
+    <button class="btn btn-mute" id="muteBtn" onclick="toggleMute()">🔊 音声を有効</button>
+
+    <div class="card">
+      <div class="status-label">ログ</div>
+      <div class="log-area" id="logs"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let detector, isRunning = false, isMuted = true;
+let proneStartTime = null, alerted = false;
+let audioCtx = null;
+
+async function init() {
+  const btn = document.getElementById('startBtn');
+  btn.disabled = true;
+  addLog("システム初期化中...");
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    document.getElementById('video').srcObject = stream;
+
+    detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet, {
+      modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+    });
+
+    isRunning = true;
+    btn.innerText = "監視停止";
+    btn.onclick = stop;
+    btn.disabled = false;
+    addLog("監視を開始しました", "var(--safe)");
+    loop();
+  } catch (e) {
+    addLog("エラー: " + e.message, "var(--danger)");
+    btn.disabled = false;
+  }
+}
+
+function stop() {
+  location.reload(); // リセット
+}
+
+async function loop() {
+  if (!isRunning) return;
+  const video = document.getElementById('video');
+  const poses = await detector.estimatePoses(video);
+  
+  updateUI(poses);
+  requestAnimationFrame(loop);
+}
+
+function updateUI(poses) {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (poses.length > 0) {
+    const pose = poses[0];
+    const kps = {};
+    pose.keypoints.forEach(k => kps[k.name] = k);
+
+    // --- 高精度「隠れ」検出ロジック ---
+    const shoulderScore = Math.max(kps.left_shoulder.score, kps.right_shoulder.score);
+    const faceScore = (kps.nose.score + kps.left_eye.score + kps.right_eye.score) / 3;
+    
+    let state = "none";
+    let sub = "赤ちゃんが見つかりません";
+
+    // 体（肩）が見えているのに、顔が見えていない場合を「うつ伏せ」と断定
+    if (shoulderScore > 0.45) {
+      if (faceScore < 0.15) {
+        state = "prone";
+        sub = "顔が隠れています（うつ伏せの疑い）";
+      } else if (faceScore > 0.4) {
+        state = "safe";
+        sub = "安全（仰向け・顔を検出）";
+      } else {
+        state = "side";
+        sub = "横向き・判定注意";
+      }
+    }
+
+    renderStatus(state, sub);
+    drawPose(ctx, pose, state === "prone");
+    handleProneTimer(state === "prone");
+    
+    document.getElementById('conf').innerText = Math.round(shoulderScore * 100) + "%";
+  } else {
+    renderStatus("none", "赤ちゃんを検出できません");
+    handleProneTimer(false);
+  }
+}
+
+function handleProneTimer(isProne) {
+  const card = document.getElementById('timerCard');
+  const num = document.getElementById('timer-num');
+  const frame = document.getElementById('monitorFrame');
+  const overlay = document.getElementById('alertOverlay');
+
+  if (isProne) {
+    if (!proneStartTime) {
+      proneStartTime = Date.now();
+      addLog("警告: 顔の消失を検出", "var(--warn)");
+    }
+    card.classList.add('active');
+    const elapsed = Math.floor((Date.now() - proneStartTime) / 1000);
+    num.innerText = elapsed;
+
+    if (elapsed >= 3 && !alerted) {
+      alerted = true;
+      triggerAlarm();
+    }
+    
+    if (alerted) {
+      frame.classList.add('danger-active');
+      overlay.style.display = "flex";
+    }
+  } else {
+    if (alerted) addLog("復帰: 顔を確認しました", "var(--safe)");
+    proneStartTime = null;
+    alerted = false;
+    card.classList.remove('active');
+    frame.classList.remove('danger-active');
+    overlay.style.display = "none";
+  }
+}
+
+function renderStatus(state, sub) {
+  const main = document.getElementById('statusMain');
+  const subEl = document.getElementById('statusSub');
+  subEl.innerText = sub;
+
+  if (state === "prone") {
+    main.innerHTML = "⚠️ <span class='danger-text'>顔の消失</span>";
+  } else if (state === "safe") {
+    main.innerHTML = "✅ <span style='color:var(--safe)'>仰向け</span>";
+  } else if (state === "side") {
+    main.innerHTML = "🌙 <span>横向き</span>";
+  } else {
+    main.innerHTML = "🔍 <span>未検出</span>";
+  }
+}
+
+function triggerAlarm() {
+  addLog("🚨 3秒経過: アラート発生", "var(--danger)");
+  if (!isMuted) {
+    // 音声合成
+    const msg = new SpeechSynthesisUtterance("警告。赤ちゃんがうつ伏せです。確認してください。");
+    msg.lang = 'ja-JP';
+    speechSynthesis.speak(msg);
+    
+    // ビープ音
+    if (!audioCtx) audioCtx = new AudioContext();
+    const osc = audioCtx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+    osc.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 1);
+  }
+}
+
+function drawPose(ctx, pose, isDanger) {
+  ctx.fillStyle = isDanger ? "#ef4444" : "#0ea5e9";
+  ctx.strokeStyle = isDanger ? "#ef4444" : "#0ea5e9";
+  ctx.lineWidth = 4;
+
+  // 肩と鼻の描画（判定に使っている部位を強調）
+  const important = ["nose", "left_shoulder", "right_shoulder"];
+  pose.keypoints.forEach(kp => {
+    if (kp.score > 0.2) {
+      ctx.beginPath();
+      ctx.arc(kp.x, kp.y, important.includes(kp.name) ? 8 : 4, 0, 2*Math.PI);
+      ctx.fill();
+    }
+  });
+}
+
+function addLog(msg, color = "#94a3b8") {
+  const area = document.getElementById('logs');
+  const div = document.createElement('div');
+  div.className = "log-entry";
+  div.style.color = color;
+  div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  area.prepend(div);
+}
+
+function toggleMute() {
+  isMuted = !isMuted;
+  document.getElementById('muteBtn').innerText = isMuted ? "🔊 音声を有効" : "🔇 消音中";
+}
+</script>
+</body>
+</html>
