@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Baby Shield AI - Continuous Beep</title>
+<title>Baby Shield AI - Stable Orientation</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.10.0/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
 <style>
@@ -11,7 +11,7 @@
 
 :root {
   --bg: #05070a; --panel: #111827; --accent: #0ea5e9;
-  --danger: #ef4444; --safe: #10b981; --text: #f8fafc;
+  --danger: #ef4444; --safe: #10b981; --warn: #f59e0b; --text: #f8fafc;
 }
 
 body {
@@ -20,7 +20,7 @@ body {
   display: flex; flex-direction: column; align-items: center;
 }
 
-.container { width: 100%; max-width: 1000px; display: grid; grid-template-columns: 1fr 340px; gap: 15px; }
+.container { width: 100%; max-width: 1050px; display: grid; grid-template-columns: 1fr 340px; gap: 15px; }
 
 .monitor {
   position: relative; background: #000; border-radius: 20px; overflow: hidden;
@@ -31,44 +31,49 @@ body {
 #video { width: 100%; height: 100%; object-fit: cover; }
 #canvas { position: absolute; inset: 0; }
 
-.side-panel { display: flex; flex-direction: column; gap: 12px; }
+.side-panel { display: flex; flex-direction: column; gap: 10px; }
 .card {
-  background: var(--panel); padding: 18px; border-radius: 16px;
+  background: var(--panel); padding: 15px; border-radius: 16px;
   border: 1px solid rgba(255,255,255,0.05);
 }
 
-.status-label { font-family: 'DotGothic16', monospace; font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; }
-.status-val { font-size: 1.2rem; font-weight: 700; }
+.status-label { font-family: 'DotGothic16', monospace; font-size: 0.7rem; color: #94a3b8; margin-bottom: 4px; }
+.status-val { font-size: 1.1rem; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+
+.chip {
+  display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.65rem; font-weight: bold;
+  background: #1e293b; color: #94a3b8; margin-top: 5px;
+}
+.active-danger { background: rgba(239,68,68,0.2); color: var(--danger); border: 1px solid var(--danger); }
+.active-safe { background: rgba(16,185,129,0.2); color: var(--safe); border: 1px solid var(--safe); }
 
 .timer-box { text-align: center; display: none; background: rgba(239,68,68,0.2); border: 2px solid var(--danger); }
 .timer-box.active { display: block; }
 #timer-num { font-size: 3.5rem; font-family: 'DotGothic16'; color: var(--danger); }
 
-.config-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+.config-row { display: flex; align-items: center; justify-content: space-between; margin-top: 5px; }
 input[type=range] { flex: 1; margin: 0 10px; accent-color: var(--accent); }
 
 .btn {
-  width: 100%; padding: 15px; border: none; border-radius: 12px;
+  width: 100%; padding: 14px; border: none; border-radius: 12px;
   font-weight: 700; cursor: pointer; transition: 0.2s;
-  display: flex; align-items: center; justify-content: center; gap: 8px;
 }
 .btn-primary { background: var(--accent); color: white; }
 .btn-secondary { background: #334155; color: white; margin-top: 8px; }
 
-.log-area { height: 120px; overflow-y: auto; font-size: 0.7rem; color: #94a3b8; background: #000; padding: 10px; border-radius: 8px; }
-.log-entry { margin-bottom: 4px; border-bottom: 1px solid #1e293b; }
+.log-area { height: 100px; overflow-y: auto; font-size: 0.65rem; color: #94a3b8; background: #000; padding: 10px; border-radius: 8px; }
 </style>
 </head>
 <body>
 
-<h1 style="margin-bottom: 15px; font-size: 1.4rem;">AI Baby Monitor <span style="font-size: 0.8rem; color: var(--danger);">連続アラート版</span></h1>
+<h1 style="margin-bottom: 15px; font-size: 1.3rem;">Baby Shield AI <span style="font-size: 0.8rem; color: var(--accent);">向き・顔判定Pro</span></h1>
 
 <div class="container">
   <div class="monitor" id="monitorFrame">
     <video id="video" autoplay muted playsinline></video>
     <canvas id="canvas"></canvas>
-    <div id="alertOverlay" style="position:absolute; inset:0; background:rgba(239,68,68,0.4); display:none; align-items:center; justify-content:center; z-index:10;">
-        <h2 style="color: #fff; text-shadow: 0 2px 10px #000;">🚨 窒息リスク継続中</h2>
+    <div id="alertOverlay" style="position:absolute; inset:0; background:rgba(239,68,68,0.4); display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10;">
+        <h2 style="color: #fff; text-shadow: 0 2px 10px #000;">🚨 窒息リスク：顔消失</h2>
     </div>
   </div>
 
@@ -77,8 +82,20 @@ input[type=range] { flex: 1; margin: 0 10px; accent-color: var(--accent); }
       <div class="status-label">アラート猶予（秒）</div>
       <div class="config-row">
         <input type="range" id="thresholdRange" min="1" max="15" value="3" oninput="updateThreshold(this.value)">
-        <span id="thresholdDisplay" style="font-weight:bold; color:var(--accent); min-width: 25px;">3</span>
+        <span id="thresholdDisplay" style="font-weight:bold; color:var(--accent);">3</span>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="status-label">身体の向き (Orientation)</div>
+      <div id="orientVal" class="status-val">--</div>
+      <div id="orientChip" class="chip">状態確認中</div>
+    </div>
+
+    <div class="card">
+      <div class="status-label">顔の露出 (Face)</div>
+      <div id="faceVal" class="status-val">--</div>
+      <div id="faceChip" class="chip">検出待機中</div>
     </div>
 
     <div class="card timer-box" id="timerCard">
@@ -86,13 +103,8 @@ input[type=range] { flex: 1; margin: 0 10px; accent-color: var(--accent); }
       <div id="timer-num">0</div>
     </div>
 
-    <div class="card">
-      <div class="status-label">現在の状態</div>
-      <div id="statusText" class="status-val">カメラ未起動</div>
-    </div>
-
     <button class="btn btn-primary" id="startBtn" onclick="init()">監視を開始</button>
-    <button class="btn btn-secondary" id="muteBtn" onclick="toggleMute()">🔊 アラート：OFF</button>
+    <button class="btn btn-secondary" id="muteBtn" onclick="toggleMute()">🔊 ビープ音：OFF</button>
 
     <div class="log-area" id="logs"></div>
   </div>
@@ -101,11 +113,13 @@ input[type=range] { flex: 1; margin: 0 10px; accent-color: var(--accent); }
 <script>
 let detector, isRunning = false, isMuted = true;
 let riskStartTime = null;
-let beepInterval = null; // 連続音用のタイマー
-let currentFacingMode = "environment";
+let beepInterval = null;
 let currentStream = null;
 let alertThreshold = 3;
 let audioCtx = null;
+
+// 安定化用の状態保持
+let lastKnownIsDanger = false;
 
 function updateThreshold(v) {
   alertThreshold = parseInt(v);
@@ -118,18 +132,14 @@ async function init() {
   try {
     if (currentStream) currentStream.getTracks().forEach(t => t.stop());
     currentStream = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: currentFacingMode, width: 640, height: 480 } 
+      video: { facingMode: "environment", width: 640, height: 480 } 
     });
     video.srcObject = currentStream;
-
-    if (!detector) {
-      detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet);
-    }
+    if (!detector) detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet);
     isRunning = true;
     btn.innerText = "再起動";
     btn.onclick = () => location.reload();
     btn.disabled = false;
-    addLog("監視を開始しました");
     loop();
   } catch (e) {
     alert("エラー: " + e.message);
@@ -149,35 +159,71 @@ function processFrame(poses) {
   canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  let faceDetected = false;
-  let bodyDetected = false;
+  let faceScore = 0;
+  let shoulderScore = 0;
+  let orientation = "不明";
+  let faceState = "隠れています";
+  let isDangerNow = true;
 
   if (poses.length > 0) {
     const pose = poses[0];
     const kps = {};
     pose.keypoints.forEach(k => kps[k.name] = k);
 
-    const sScore = Math.max(kps.left_shoulder.score, kps.right_shoulder.score);
-    const fScore = (kps.nose.score + kps.left_eye.score + kps.right_eye.score) / 3;
+    // スコア算出
+    faceScore = (kps.nose.score + kps.left_eye.score + kps.right_eye.score) / 3;
+    shoulderScore = (kps.left_shoulder.score + kps.right_shoulder.score) / 2;
 
-    bodyDetected = sScore > 0.35;
-    faceDetected = fScore > 0.20;
+    // 顔の状態判定
+    if (faceScore > 0.4) {
+      faceState = "はっきり見えます";
+      isDangerNow = false;
+    } else if (faceScore > 0.15) {
+      faceState = "一部隠れています";
+      isDangerNow = false; // わずかでも顔が認識されていれば安全寄り
+    } else {
+      faceState = "隠れています";
+      isDangerNow = true;
+    }
 
-    drawPose(ctx, pose, !faceDetected);
+    // 身体の向き判定ロジック
+    if (shoulderScore > 0.4) {
+      if (faceScore > 0.3) orientation = "仰向け";
+      else if (faceScore > 0.1) orientation = "横向き";
+      else orientation = "うつ伏せ";
+    } else {
+      orientation = "検出不安定";
+    }
+
+    // チャタリング改善のキモ：
+    // 「身体（肩）が見えなくなった」＝「布団に完全に潜った」可能性が高いため、
+    // 顔が同時に見えていなければ、身体が未検出になってもリスク判定（true）を維持します。
+    if (shoulderScore < 0.2 && faceScore < 0.2) {
+      isDangerNow = true; 
+    }
+
+    drawPose(ctx, pose, isDangerNow);
+  } else {
+    // 誰もいない、あるいは完全遮蔽
+    isDangerNow = true;
+    orientation = "未検出";
+    faceState = "未検出";
   }
 
-  // 「顔が見えない」ならリスク。身体の有無が激しく入れ替わっても、このフラグが優先されます。
-  const isDangerNow = !faceDetected;
-
-  updateUI(bodyDetected, faceDetected);
+  updateStatusUI(orientation, faceState, isDangerNow);
   handleRiskTimer(isDangerNow);
 }
 
-function updateUI(body, face) {
-  const status = document.getElementById('statusText');
-  if (!body && !face) status.innerText = "🔍 探索中...";
-  else if (!face) status.innerText = "⚠️ 顔の消失を検出";
-  else status.innerText = "✅ 正常監視中";
+function updateStatusUI(orient, face, isDanger) {
+  document.getElementById('orientVal').innerText = orient;
+  const oChip = document.getElementById('orientChip');
+  oChip.innerText = orient === "うつ伏せ" ? "要確認" : "検知中";
+  oChip.className = `chip ${orient === "うつ伏せ" ? "active-danger" : "active-safe"}`;
+
+  document.getElementById('faceVal').innerText = face;
+  const fChip = document.getElementById('faceChip');
+  fChip.innerText = isDanger ? "危険" : "正常";
+  fChip.className = `chip ${isDanger ? "active-danger" : "active-safe"}`;
 }
 
 function handleRiskTimer(isDanger) {
@@ -191,14 +237,12 @@ function handleRiskTimer(isDanger) {
     const elapsed = Math.floor((Date.now() - riskStartTime) / 1000);
     document.getElementById('timer-num').innerText = elapsed;
     
-    // 設定秒数を超えたら連続アラートを開始
     if (elapsed >= alertThreshold) {
       overlay.style.display = "flex";
       frame.classList.add('danger-active');
       startContinuousBeep();
     }
   } else {
-    // 安全が確認されたら全てリセット
     riskStartTime = null;
     card.classList.remove('active');
     overlay.style.display = "none";
@@ -207,27 +251,16 @@ function handleRiskTimer(isDanger) {
   }
 }
 
-// 連続アラートの開始
 function startContinuousBeep() {
   if (beepInterval || isMuted) return;
-  
-  addLog("🚨 アラート：連続警告中", "var(--danger)");
-  
-  // 初回を即座に鳴らす
   triggerBeep();
-  
-  // 以後、0.8秒間隔で鳴らし続ける
-  beepInterval = setInterval(() => {
-    triggerBeep();
-  }, 800);
+  beepInterval = setInterval(triggerBeep, 800);
 }
 
-// アラートの停止
 function stopContinuousBeep() {
   if (beepInterval) {
     clearInterval(beepInterval);
     beepInterval = null;
-    addLog("✅ リスク解消：アラート停止", "var(--safe)");
   }
 }
 
@@ -239,23 +272,19 @@ function triggerBeep() {
   const now = audioCtx.currentTime;
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
-  
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
+  osc.connect(gain); gain.connect(audioCtx.destination);
   
   osc.type = 'square';
-  osc.frequency.setValueAtTime(880, now); // 高いA音
+  osc.frequency.setValueAtTime(950, now); // 少し高めの警告音
   gain.gain.setValueAtTime(0.15, now);
-  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
-  
-  osc.start(now);
-  osc.stop(now + 0.4);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+  osc.start(now); osc.stop(now + 0.5);
 }
 
 function drawPose(ctx, pose, isDanger) {
   ctx.fillStyle = isDanger ? "#ef4444" : "#0ea5e9";
   pose.keypoints.forEach(kp => {
-    if (kp.score > 0.3) {
+    if (kp.score > 0.25) {
       ctx.beginPath(); ctx.arc(kp.x, kp.y, 4, 0, 2*Math.PI); ctx.fill();
     }
   });
@@ -264,7 +293,7 @@ function drawPose(ctx, pose, isDanger) {
 function addLog(msg, color = "#94a3b8") {
   const area = document.getElementById('logs');
   const div = document.createElement('div');
-  div.className = "log-entry"; div.style.color = color;
+  div.style.color = color;
   div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
   area.prepend(div);
 }
@@ -272,13 +301,10 @@ function addLog(msg, color = "#94a3b8") {
 function toggleMute() {
   isMuted = !isMuted;
   const btn = document.getElementById('muteBtn');
-  btn.innerText = isMuted ? "🔊 アラート：OFF" : "🔇 アラート：ON";
+  btn.innerText = isMuted ? "🔊 ビープ音：OFF" : "🔇 ビープ音：ON";
   btn.style.background = isMuted ? "#334155" : "var(--safe)";
-  
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
-
-  // Muteにした瞬間にアラートも止める
   if (isMuted) stopContinuousBeep();
 }
 </script>
