@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Baby Monitor Pro - Stable Edition</title>
+<title>Baby Shield AI Pro - Risk Monitor</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.10.0/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
 <style>
@@ -38,10 +38,9 @@ body {
 }
 
 .status-label { font-family: 'DotGothic16', monospace; font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; }
-.status-val { font-size: 1.4rem; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.status-val { font-size: 1.3rem; font-weight: 700; display: flex; align-items: center; gap: 8px; }
 
-/* 判定チップ */
-.chip-group { display: flex; gap: 8px; margin-top: 10px; }
+.chip-group { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .chip {
   padding: 4px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: bold;
   background: #1e293b; color: #94a3b8; border: 1px solid rgba(255,255,255,0.1);
@@ -49,9 +48,12 @@ body {
 .chip.active-safe { background: rgba(16,185,129,0.2); color: var(--safe); border-color: var(--safe); }
 .chip.active-danger { background: rgba(239,68,68,0.2); color: var(--danger); border-color: var(--danger); }
 
-.timer-box { text-align: center; display: none; background: rgba(239,68,68,0.1); }
+.config-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+input[type=range] { flex: 1; margin: 0 10px; accent-color: var(--accent); }
+
+.timer-box { text-align: center; display: none; background: rgba(239,68,68,0.15); border: 1px solid var(--danger); }
 .timer-box.active { display: block; }
-#timer-num { font-size: 2.5rem; font-family: 'DotGothic16'; color: var(--danger); }
+#timer-num { font-size: 3rem; font-family: 'DotGothic16'; color: var(--danger); }
 
 .btn {
   width: 100%; padding: 12px; border: none; border-radius: 12px;
@@ -67,7 +69,7 @@ body {
 </head>
 <body>
 
-<h1 style="margin-bottom: 15px; font-size: 1.5rem;">Baby Monitor AI <span style="font-size: 0.8rem; color: var(--accent);">STABLE</span></h1>
+<h1 style="margin-bottom: 15px; font-size: 1.4rem;">AI Baby Monitor <span style="font-size: 0.8rem; color: var(--danger);">リスク検知Pro</span></h1>
 
 <div class="container">
   <div class="monitor" id="monitorFrame">
@@ -75,38 +77,41 @@ body {
     <canvas id="canvas"></canvas>
     <div id="alertOverlay" style="position:absolute; inset:0; background:rgba(239,68,68,0.3); display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10;">
         <span style="font-size:4rem;">🚨</span>
-        <h2 style="text-shadow: 0 2px 10px #000;">確認してください</h2>
+        <h2 style="text-shadow: 0 2px 10px #000; color: #fff;">窒息リスクを検出</h2>
     </div>
   </div>
 
   <div class="side-panel">
     <div class="card">
-      <div class="status-label">身体の状態 (Pose)</div>
-      <div class="status-val" id="poseMain">--</div>
-      <div class="chip-group">
-        <div id="chip-supine" class="chip">仰向け</div>
-        <div id="chip-prone" class="chip">うつ伏せ</div>
+      <div class="status-label">アラート猶予設定</div>
+      <div class="config-row">
+        <input type="range" id="thresholdRange" min="1" max="15" value="3" oninput="updateThreshold(this.value)">
+        <span id="thresholdDisplay" style="font-weight:bold; color:var(--accent); min-width: 30px; text-align: right;">3</span>秒
       </div>
     </div>
 
     <div class="card">
-      <div class="status-label">顔の向き (Face)</div>
-      <div class="status-val" id="faceMain" style="font-size: 1.2rem;">--</div>
+      <div class="status-label">身体の状態 (Pose)</div>
+      <div id="poseMain" class="status-val">--</div>
       <div class="chip-group">
-        <div id="chip-front" class="chip">正面</div>
-        <div id="chip-side" class="chip">横向き</div>
-        <div id="chip-hidden" class="chip">消失</div>
+        <div id="chip-body-detected" class="chip">検出</div>
+        <div id="chip-body-hidden" class="chip">未検出</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="status-label">顔の状態 (Face)</div>
+      <div id="faceMain" class="status-val" style="font-size: 1.1rem;">--</div>
+      <div class="chip-group">
+        <div id="chip-face-front" class="chip">正面</div>
+        <div id="chip-face-side" class="chip">横向き</div>
+        <div id="chip-face-risk" class="chip">消失/遮蔽</div>
       </div>
     </div>
 
     <div class="card timer-box" id="timerCard">
-      <div class="status-label">警告継続秒数</div>
       <div id="timer-num">0</div>
-    </div>
-
-    <div class="card" style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
-      <div><div class="status-label">身体信頼度</div><div id="conf-p">--%</div></div>
-      <div><div class="status-label">顔信頼度</div><div id="conf-f">--%</div></div>
+      <div style="font-size: 0.7rem; color: var(--danger); font-weight: bold;">リスク継続中</div>
     </div>
 
     <button class="btn btn-primary" id="startBtn" onclick="init()">監視を開始する</button>
@@ -119,36 +124,44 @@ body {
 
 <script>
 let detector, isRunning = false, isMuted = true;
-let proneStartTime = null, alerted = false;
+let riskStartTime = null, alerted = false;
 let currentFacingMode = "environment";
 let currentStream = null;
+let alertThreshold = 3;
 
-// 安定化のための履歴変数
+// チャタリング防止用
 let lastFaceState = "none";
-let faceStateCounter = 0;
-const STABLE_THRESHOLD = 5; // 5フレーム連続で同じ状態なら変更を認める
+let stableCounter = 0;
+const STABLE_LIMIT = 5; 
+
+function updateThreshold(v) {
+  alertThreshold = parseInt(v);
+  document.getElementById('thresholdDisplay').innerText = v;
+}
 
 async function init() {
-  const startBtn = document.getElementById('startBtn');
-  startBtn.disabled = true;
+  const btn = document.getElementById('startBtn');
+  btn.disabled = true;
   try {
     if (currentStream) currentStream.getTracks().forEach(t => t.stop());
     currentStream = await navigator.mediaDevices.getUserMedia({ 
       video: { facingMode: currentFacingMode, width: 640, height: 480 } 
     });
-    const video = document.getElementById('video');
     video.srcObject = currentStream;
     video.style.transform = (currentFacingMode === "user") ? "scaleX(-1)" : "scaleX(1)";
+    document.getElementById('canvas').style.transform = (currentFacingMode === "user") ? "scaleX(-1)" : "scaleX(1)";
 
     if (!detector) {
       detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet);
     }
     isRunning = true;
-    startBtn.innerText = "監視中...";
+    btn.innerText = "監視停止（リセット）";
+    btn.onclick = () => location.reload();
+    btn.disabled = false;
     loop();
   } catch (e) {
     alert("エラー: " + e.message);
-    startBtn.disabled = false;
+    btn.disabled = false;
   }
 }
 
@@ -160,97 +173,107 @@ async function switchCamera() {
 async function loop() {
   if (!isRunning) return;
   const poses = await detector.estimatePoses(video);
-  processPoses(poses);
+  processFrame(poses);
   requestAnimationFrame(loop);
 }
 
-function processPoses(poses) {
+function processFrame(poses) {
   const ctx = canvas.getContext('2d');
   canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  let isDangerNow = false;
+  let bodyScore = 0;
+  let faceScore = 0;
 
   if (poses.length > 0) {
     const pose = poses[0];
     const kps = {};
     pose.keypoints.forEach(k => kps[k.name] = k);
 
-    // スコア計算
-    const sScore = Math.max(kps.left_shoulder.score, kps.right_shoulder.score);
-    const fScore = (kps.nose.score + kps.left_eye.score + kps.right_eye.score) / 3;
+    bodyScore = Math.max(kps.left_shoulder.score, kps.right_shoulder.score);
+    faceScore = (kps.nose.score + kps.left_eye.score + kps.right_eye.score) / 3;
 
-    // 1. 身体の状態判定 (Pose)
-    const poseState = (sScore > 0.45) ? "detected" : "none";
-    document.getElementById('poseMain').innerText = (poseState === "detected") ? "赤ちゃんを検出" : "--";
-    updateChip('chip-supine', fScore > 0.35);
-    updateChip('chip-prone', sScore > 0.45 && fScore < 0.15);
+    const isBodyVisible = bodyScore > 0.45;
+    updatePoseUI(isBodyVisible);
 
-    // 2. 顔の向き判定 (Face) + チャタリング防止
+    // 顔判定
     let rawFaceState = "hidden";
-    if (fScore > 0.45) rawFaceState = "front";
-    else if (fScore > 0.15) rawFaceState = "side";
+    if (faceScore > 0.45) rawFaceState = "front";
+    else if (faceScore > 0.15) rawFaceState = "side";
 
-    if (rawFaceState === lastFaceState) {
-      faceStateCounter++;
-    } else {
-      lastFaceState = rawFaceState;
-      faceStateCounter = 0;
-    }
+    if (rawFaceState === lastFaceState) stableCounter++;
+    else { lastFaceState = rawFaceState; stableCounter = 0; }
 
-    if (faceStateCounter >= STABLE_THRESHOLD) {
-      updateFaceUI(rawFaceState);
-    }
+    if (stableCounter >= STABLE_LIMIT) updateFaceUI(rawFaceState);
 
-    // 3. 警告ロジック
-    const isDanger = (sScore > 0.45 && fScore < 0.15);
-    handleProneTimer(isDanger);
+    // --- 窒息リスク判定ロジック ---
+    // 1. 身体はあるが顔が隠れている（布団・うつ伏せ）
+    if (isBodyVisible && faceScore < 0.15) isDangerNow = true;
+    // 2. 身体も顔も完全に見えない（布団への潜り込み）
+    if (!isBodyVisible && faceScore < 0.15) isDangerNow = true;
 
-    document.getElementById('conf-p').innerText = Math.round(sScore * 100) + "%";
-    document.getElementById('conf-f').innerText = Math.round(fScore * 100) + "%";
-    drawPose(ctx, pose, isDanger);
+    drawPose(ctx, pose, isDangerNow);
+  } else {
+    // 誰もいない、あるいは完全に遮蔽されている
+    isDangerNow = true;
+    updatePoseUI(false);
+    updateFaceUI("hidden");
   }
+
+  handleRiskTimer(isDangerNow);
+}
+
+function updatePoseUI(visible) {
+  document.getElementById('poseMain').innerText = visible ? "赤ちゃんを検出中" : "未検出";
+  updateChip('chip-body-detected', visible);
+  updateChip('chip-body-hidden', !visible);
 }
 
 function updateFaceUI(state) {
   const main = document.getElementById('faceMain');
-  const labels = { front: "正面を向いています", side: "横を向いています", hidden: "顔が見えません" };
+  const labels = { front: "正面を向いています", side: "横を向いています", hidden: "顔が確認できません" };
   main.innerText = labels[state];
-  updateChip('chip-front', state === 'front');
-  updateChip('chip-side', state === 'side');
-  updateChip('chip-hidden', state === 'hidden', true);
+  updateChip('chip-face-front', state === 'front');
+  updateChip('chip-face-side', state === 'side');
+  updateChip('chip-face-risk', state === 'hidden', state === 'hidden');
 }
 
-function updateChip(id, isActive, isDanger = false) {
+function updateChip(id, active, danger = false) {
   const el = document.getElementById(id);
   el.className = 'chip';
-  if (isActive) {
-    el.classList.add(isDanger ? 'active-danger' : 'active-safe');
-  }
+  if (active) el.classList.add(danger ? 'active-danger' : 'active-safe');
 }
 
-function handleProneTimer(isDanger) {
+function handleRiskTimer(isDanger) {
   const card = document.getElementById('timerCard');
   const overlay = document.getElementById('alertOverlay');
+  const frame = document.getElementById('monitorFrame');
+
   if (isDanger) {
-    if (!proneStartTime) proneStartTime = Date.now();
+    if (!riskStartTime) riskStartTime = Date.now();
     card.classList.add('active');
-    const elapsed = Math.floor((Date.now() - proneStartTime) / 1000);
+    const elapsed = Math.floor((Date.now() - riskStartTime) / 1000);
     document.getElementById('timer-num').innerText = elapsed;
-    if (elapsed >= 3 && !alerted) {
+    
+    if (elapsed >= alertThreshold && !alerted) {
       alerted = true;
       triggerAlarm();
       overlay.style.display = "flex";
+      frame.classList.add('danger-active');
     }
   } else {
-    proneStartTime = null; alerted = false;
+    riskStartTime = null; alerted = false;
     card.classList.remove('active');
     overlay.style.display = "none";
+    frame.classList.remove('danger-active');
   }
 }
 
 function triggerAlarm() {
-  addLog("🚨 警告：うつ伏せ/遮蔽を検出", "var(--danger)");
+  addLog(`🚨 アラート：顔消失を${alertThreshold}秒継続検知`, "var(--danger)");
   if (!isMuted) {
-    const msg = new SpeechSynthesisUtterance("赤ちゃんがうつ伏せです。");
+    const msg = new SpeechSynthesisUtterance("顔が隠れています。至急確認してください。");
     msg.lang = 'ja-JP';
     speechSynthesis.speak(msg);
   }
