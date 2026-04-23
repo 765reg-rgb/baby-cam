@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Baby Shield AI - Beep Only</title>
+<title>Baby Shield AI - Continuous Beep</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.10.0/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
 <style>
@@ -61,14 +61,14 @@ input[type=range] { flex: 1; margin: 0 10px; accent-color: var(--accent); }
 </head>
 <body>
 
-<h1 style="margin-bottom: 15px; font-size: 1.4rem;">AI Baby Monitor <span style="font-size: 0.8rem; color: var(--danger);">ビープ音アラート版</span></h1>
+<h1 style="margin-bottom: 15px; font-size: 1.4rem;">AI Baby Monitor <span style="font-size: 0.8rem; color: var(--danger);">連続アラート版</span></h1>
 
 <div class="container">
   <div class="monitor" id="monitorFrame">
     <video id="video" autoplay muted playsinline></video>
     <canvas id="canvas"></canvas>
     <div id="alertOverlay" style="position:absolute; inset:0; background:rgba(239,68,68,0.4); display:none; align-items:center; justify-content:center; z-index:10;">
-        <h2 style="color: #fff; text-shadow: 0 2px 10px #000;">⚠️ 顔の消失を検出</h2>
+        <h2 style="color: #fff; text-shadow: 0 2px 10px #000;">🚨 窒息リスク継続中</h2>
     </div>
   </div>
 
@@ -92,7 +92,6 @@ input[type=range] { flex: 1; margin: 0 10px; accent-color: var(--accent); }
     </div>
 
     <button class="btn btn-primary" id="startBtn" onclick="init()">監視を開始</button>
-    <button class="btn btn-secondary" onclick="switchCamera()">🔄 カメラ切替</button>
     <button class="btn btn-secondary" id="muteBtn" onclick="toggleMute()">🔊 アラート：OFF</button>
 
     <div class="log-area" id="logs"></div>
@@ -101,7 +100,8 @@ input[type=range] { flex: 1; margin: 0 10px; accent-color: var(--accent); }
 
 <script>
 let detector, isRunning = false, isMuted = true;
-let riskStartTime = null, alerted = false;
+let riskStartTime = null;
+let beepInterval = null; // 連続音用のタイマー
 let currentFacingMode = "environment";
 let currentStream = null;
 let alertThreshold = 3;
@@ -121,7 +121,6 @@ async function init() {
       video: { facingMode: currentFacingMode, width: 640, height: 480 } 
     });
     video.srcObject = currentStream;
-    video.style.transform = (currentFacingMode === "user") ? "scaleX(-1)" : "scaleX(1)";
 
     if (!detector) {
       detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet);
@@ -136,11 +135,6 @@ async function init() {
     alert("エラー: " + e.message);
     btn.disabled = false;
   }
-}
-
-async function switchCamera() {
-  currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
-  init();
 }
 
 async function loop() {
@@ -172,8 +166,7 @@ function processFrame(poses) {
     drawPose(ctx, pose, !faceDetected);
   }
 
-  // 「顔が見えない」状態が続いていればリスクと判定
-  // 身体の有無に左右されず、顔が消えた瞬間からカウントを維持します
+  // 「顔が見えない」ならリスク。身体の有無が激しく入れ替わっても、このフラグが優先されます。
   const isDangerNow = !faceDetected;
 
   updateUI(bodyDetected, faceDetected);
@@ -182,9 +175,9 @@ function processFrame(poses) {
 
 function updateUI(body, face) {
   const status = document.getElementById('statusText');
-  if (!body && !face) status.innerText = "🔍 赤ちゃんを探索中...";
-  else if (body && !face) status.innerText = "⚠️ 顔の遮蔽を検出";
-  else if (face) status.innerText = "✅ 正常監視中";
+  if (!body && !face) status.innerText = "🔍 探索中...";
+  else if (!face) status.innerText = "⚠️ 顔の消失を検出";
+  else status.innerText = "✅ 正常監視中";
 }
 
 function handleRiskTimer(isDanger) {
@@ -198,45 +191,65 @@ function handleRiskTimer(isDanger) {
     const elapsed = Math.floor((Date.now() - riskStartTime) / 1000);
     document.getElementById('timer-num').innerText = elapsed;
     
-    if (elapsed >= alertThreshold && !alerted) {
-      alerted = true;
-      triggerBeep();
+    // 設定秒数を超えたら連続アラートを開始
+    if (elapsed >= alertThreshold) {
       overlay.style.display = "flex";
       frame.classList.add('danger-active');
+      startContinuousBeep();
     }
   } else {
-    riskStartTime = null; alerted = false;
+    // 安全が確認されたら全てリセット
+    riskStartTime = null;
     card.classList.remove('active');
     overlay.style.display = "none";
     frame.classList.remove('danger-active');
+    stopContinuousBeep();
   }
 }
 
-// 警告音：合成音声を廃止し、ビープ音のみを生成
-function triggerBeep() {
-  addLog(`🚨 アラート：警告音を再生`, "var(--danger)");
+// 連続アラートの開始
+function startContinuousBeep() {
+  if (beepInterval || isMuted) return;
   
-  if (!isMuted) {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    
-    const playBeep = (freq, startTime, duration) => {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.type = 'square'; // はっきりした音
-      osc.frequency.setValueAtTime(freq, startTime);
-      gain.gain.setValueAtTime(0.2, startTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
-      osc.start(startTime);
-      osc.stop(startTime + duration);
-    };
+  addLog("🚨 アラート：連続警告中", "var(--danger)");
+  
+  // 初回を即座に鳴らす
+  triggerBeep();
+  
+  // 以後、0.8秒間隔で鳴らし続ける
+  beepInterval = setInterval(() => {
+    triggerBeep();
+  }, 800);
+}
 
-    // 2連ビープ音を鳴らす
-    const now = audioCtx.currentTime;
-    playBeep(880, now, 0.2);
-    playBeep(880, now + 0.3, 0.5);
+// アラートの停止
+function stopContinuousBeep() {
+  if (beepInterval) {
+    clearInterval(beepInterval);
+    beepInterval = null;
+    addLog("✅ リスク解消：アラート停止", "var(--safe)");
   }
+}
+
+function triggerBeep() {
+  if (isMuted) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(880, now); // 高いA音
+  gain.gain.setValueAtTime(0.15, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+  
+  osc.start(now);
+  osc.stop(now + 0.4);
 }
 
 function drawPose(ctx, pose, isDanger) {
@@ -262,9 +275,11 @@ function toggleMute() {
   btn.innerText = isMuted ? "🔊 アラート：OFF" : "🔇 アラート：ON";
   btn.style.background = isMuted ? "#334155" : "var(--safe)";
   
-  // ユーザーの操作によりAudioContextを初期化（ブラウザ制限の解除）
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  // Muteにした瞬間にアラートも止める
+  if (isMuted) stopContinuousBeep();
 }
 </script>
 </body>
